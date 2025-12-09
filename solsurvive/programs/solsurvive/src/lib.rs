@@ -184,16 +184,64 @@ pub mod solsurvive {
         msg!("Prize claimed: {} lamports", prize);
         Ok(())
     }
+    
+    pub fn reset_game(ctx: Context<ResetGame>) -> Result<()> {
+        let game = &mut ctx.accounts.game;
+        
+        // Transfer 0.05 SOL from player to game PDA (Entry Fee)
+        let entry_fee = 50000000; // 0.05 SOL
+        let cpi_context = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.player.to_account_info(),
+                to: game.to_account_info(),
+            },
+        );
+        anchor_lang::system_program::transfer(cpi_context, entry_fee)?;
+        
+        game.player = ctx.accounts.player.key();
+        game.player_x = 5;
+        game.player_y = 5;
+        game.player_alive = true;
+        game.round = 1;
+        game.safe_zone_radius = 5;
+        game.prize_pool += entry_fee; // Add to existing pool or reset? Let's add (pot grows?) or just reset. 
+        // Actually for simplicity, let's just treat it as a new game
+        game.prize_pool = entry_fee; 
+        game.game_over = false;
+
+        // Initialize AI positions - Fixed spawning for fairness
+        // 0:Aggro 1:Defensive 2:Coward 3:Chaos
+        game.ai_x = [1, 9, 1, 9, 5, 0, 9, 5, 4];
+        game.ai_y = [1, 1, 9, 9, 1, 5, 5, 9, 4];
+        game.ai_alive = [true; 9];
+        game.ai_personality = [0, 1, 2, 3, 0, 1, 2, 0, 3];
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
 pub struct InitializeGame<'info> {
     #[account(
-        init,
-        payer = player,
-        space = 8 + Game::INIT_SPACE,
-        seeds = [b"game", player.key().as_ref()],
+        init, 
+        payer = player, 
+        space = 8 + 32 + 2 + 2 + 1 + 9 + 9 + 9 + 9 + 1 + 1 + 8 + 1 + 1,
+        seeds = [b"game", player.key().as_ref()], 
         bump
+    )]
+    pub game: Account<'info, Game>,
+    #[account(mut)]
+    pub player: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ResetGame<'info> {
+    #[account(
+        mut,
+        seeds = [b"game", player.key().as_ref()], 
+        bump = game.bump
     )]
     pub game: Account<'info, Game>,
     #[account(mut)]
@@ -205,8 +253,9 @@ pub struct InitializeGame<'info> {
 pub struct MovePlayer<'info> {
     #[account(
         mut,
-        seeds = [b"game", player.key().as_ref()],
-        bump = game.bump
+        seeds = [b"game", player.key().as_ref()], 
+        bump = game.bump,
+        has_one = player
     )]
     pub game: Account<'info, Game>,
     pub player: Signer<'info>,
@@ -216,8 +265,9 @@ pub struct MovePlayer<'info> {
 pub struct ProcessAITurn<'info> {
     #[account(
         mut,
-        seeds = [b"game", player.key().as_ref()],
-        bump = game.bump
+        seeds = [b"game", player.key().as_ref()], 
+        bump = game.bump,
+        has_one = player
     )]
     pub game: Account<'info, Game>,
     pub player: Signer<'info>,
@@ -227,8 +277,9 @@ pub struct ProcessAITurn<'info> {
 pub struct AdvanceRound<'info> {
     #[account(
         mut,
-        seeds = [b"game", player.key().as_ref()],
-        bump = game.bump
+        seeds = [b"game", player.key().as_ref()], 
+        bump = game.bump,
+        has_one = player
     )]
     pub game: Account<'info, Game>,
     pub player: Signer<'info>,
@@ -238,16 +289,17 @@ pub struct AdvanceRound<'info> {
 pub struct ClaimPrize<'info> {
     #[account(
         mut,
-        seeds = [b"game", player.key().as_ref()],
-        bump = game.bump
+        seeds = [b"game", player.key().as_ref()], 
+        bump = game.bump,
+        has_one = player
     )]
     pub game: Account<'info, Game>,
     #[account(mut)]
     pub player: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[account]
-#[derive(InitSpace)]
 pub struct Game {
     pub player: Pubkey,
     pub player_x: u8,
