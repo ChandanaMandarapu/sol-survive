@@ -1,7 +1,19 @@
-.anchor
-.DS_Store
+# Rust
 target
-**/*.rs.bk
+*.rs.bk
+
+# Anchor
+.anchor
+
+# Node
 node_modules
+yarn.lock
+
+# OS generated
+.DS_Store
+
+# Test-ledger (local Solana ledger)
 test-ledger
-.yarn
+
+# WSL temp
+*.swp
