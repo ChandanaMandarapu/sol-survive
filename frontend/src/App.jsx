@@ -201,24 +201,18 @@ function GameScreen() {
       if (dir === 'r') px = Math.min(9, px + 1);
 
       const pda = getGamePDA();
+      
+      // Bundle all instructions into ONE transaction (1 Approval)
+      const tx = await program.methods
+        .movePlayer(px, py)
+        .accounts({ game: pda, player: wallet.publicKey })
+        .postInstructions([
+           await program.methods.processAiTurn().accounts({ game: pda, player: wallet.publicKey }).instruction(),
+           await program.methods.advanceRound().accounts({ game: pda, player: wallet.publicKey }).instruction()
+        ])
+        .rpc();
 
-      // We bundle instructions for speed? Or separate for clarity? 
-      // Separate is safer for debugging, bundled is faster.
-      // Let's do separate calls for now to ensure state updates correctly.
-
-      await program.methods.movePlayer(px, py).accounts({
-        game: pda, player: wallet.publicKey
-      }).rpc();
-
-      addLog('AI thinking...');
-      await program.methods.processAiTurn().accounts({
-        game: pda, player: wallet.publicKey
-      }).rpc();
-
-      await program.methods.advanceRound().accounts({
-        game: pda, player: wallet.publicKey
-      }).rpc();
-
+      addLog('Move confirmed!');
       await loadGame();
     } catch (e) {
       addLog('Error: ' + e.message);
