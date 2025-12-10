@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-solsurvive = "H9xrsmTET4Kfj51ULfZog5GKjrBanrknrSAByqeCw5w2"
+solsurvive = "5mJUgVeCnRaXHY45RhTfrg7DVnWoVYRSYShZWFVFHgF6"
 
 [registry]
 url = "https://api.apr.dev"
