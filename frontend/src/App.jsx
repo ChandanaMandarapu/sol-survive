@@ -42,7 +42,7 @@ function GameScreen() {
   const wallet = useWallet();
   const [game, setGame] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [logs, setLogs] = useState(['> SOLSURVIVE v2.0 initialized...', '> AI neural networks online...', '> Blockchain connected...']);
+  const [logs, setLogs] = useState(['> SOLSURVIVE v2.0 ONLINE', '> Smart contract deployed', '> Ready to play']);
   const [practice, setPractice] = useState(false);
   const [practiceGame, setPracticeGame] = useState(null);
   const [txCount, setTxCount] = useState(0);
@@ -52,7 +52,7 @@ function GameScreen() {
 
   const provider = useMemo(() => {
     if (!wallet.publicKey) return null;
-    return new AnchorProvider(connection, wallet, { preflightCommitment: 'processed' });
+    return new AnchorProvider(connection, wallet, { preflightCommitment: 'confirmed' });
   }, [connection, wallet]);
 
   const program = useMemo(() => {
@@ -75,6 +75,7 @@ function GameScreen() {
     try {
       const pda = getGamePDA();
       const acc = await program.account.game.fetch(pda);
+      
       setGame({
         px: acc.playerX, py: acc.playerY, alive: acc.playerAlive,
         aiX: acc.aiX, aiY: acc.aiY, aiAlive: acc.aiAlive, aiPers: acc.aiPersonality,
@@ -90,6 +91,7 @@ function GameScreen() {
         else if (!killCam) findKiller(acc);
       }
     } catch (e) {
+      console.log("Load game error:", e.message);
       setGame(null);
     }
   };
@@ -98,106 +100,85 @@ function GameScreen() {
     for (let i = 0; i < 9; i++) {
       if (acc.aiAlive[i] && acc.aiX[i] === acc.playerX && acc.aiY[i] === acc.playerY) {
         const names = ['🔥 AGGRO', '🛡️ DEFENSE', '😱 COWARD', '🎲 CHAOS'];
-        setKillCam({ ai: i, name: names[acc.aiPersonality[i]], x: acc.aiX[i], y: acc.aiY[i] });
+        setKillCam({ ai: i, name: names[acc.aiPersonality[i]] });
         return;
       }
     }
-    setKillCam({ ai: -1, name: 'SAFE ZONE', x: acc.playerX, y: acc.playerY });
+    setKillCam({ ai: -1, name: '⚠️ SAFE ZONE' });
   };
 
   useEffect(() => {
-    if (!practice) loadGame();
-    const interval = setInterval(() => {
-      if (!practice && wallet.publicKey) loadGame();
-    }, 2000);
-    return () => clearInterval(interval);
+    if (!practice && wallet.publicKey) {
+      loadGame();
+      const interval = setInterval(loadGame, 3000);
+      return () => clearInterval(interval);
+    }
   }, [program, wallet.publicKey, practice]);
 
-  const forceCloseAccount = async () => {
-    if (!wallet.publicKey || !connection) return false;
-    
-    try {
-      const pda = getGamePDA();
-      const accountInfo = await connection.getAccountInfo(pda);
-      
-      if (accountInfo) {
-        addLog('🗑️ Closing old account...');
-        
-        // Manual account close
-        const tx = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: pda,
-            toPubkey: wallet.publicKey,
-            lamports: accountInfo.lamports,
-          })
-        );
-        
-        // This will fail but that's okay - we just want to mark it for closure
-        try {
-          await wallet.sendTransaction(tx, connection);
-        } catch (e) {
-          // Expected to fail - account is owned by program
-          addLog('⚠️ Manual close failed (expected). Use Solana CLI:');
-          addLog(`solana program close ${pda.toString()}`);
-          return false;
-        }
-      }
-      return true;
-    } catch (e) {
-      return true; // Account doesn't exist, which is fine
-    }
-  };
-
   const createGame = async () => {
-    if (!program) return;
+    if (!program || !wallet.publicKey) return;
     setLoading(true);
-    addLog('🎮 Initializing on-chain battle arena...');
+    addLog('🎮 Creating game...');
     
     try {
       const pda = getGamePDA();
-      await program.methods.initializeGame().accounts({
-        game: pda, player: wallet.publicKey, systemProgram: SystemProgram.programId
-      }).rpc();
-      setTxCount(prev => prev + 1);
-      addLog('✅ Arena created! 0.05 SOL staked.');
-      await loadGame();
-    } catch (e) {
-      const errMsg = e.message || e.toString();
       
-      if (errMsg.includes('already in use') || errMsg.includes('0x0')) {
-        addLog('🔄 Account exists, trying reset...');
-        
+      const tx = await program.methods.initializeGame()
+        .accounts({
+          game: pda,
+          player: wallet.publicKey,
+          systemProgram: SystemProgram.programId
+        })
+        .rpc();
+      
+      setTxCount(prev => prev + 1);
+      addLog('✅ Game created! Entry: 0.05 SOL');
+      addLog('⏳ Loading game state...');
+      
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      await loadGame();
+      
+    } catch (e) {
+      const msg = e.message || e.toString();
+      console.error("Create game error:", e);
+      
+      if (msg.includes('0x0') || msg.includes('already in use')) {
+        addLog('🔄 Existing game found, loading...');
         try {
-          const pda = getGamePDA();
-          await program.methods.resetGame().accounts({
-            game: pda, player: wallet.publicKey, systemProgram: SystemProgram.programId
-          }).rpc();
-          setTxCount(prev => prev + 1);
-          addLog('✅ Game reset! GL HF.');
           await loadGame();
-        } catch (resetErr) {
-          const resetMsg = resetErr.message || resetErr.toString();
-          
-          if (resetMsg.includes('account data')) {
-            addLog('❌ Old account structure detected!');
-            addLog('📋 MANUAL FIX REQUIRED:');
-            addLog(`Run: solana program close ${getGamePDA().toString()}`);
-            addLog('Then refresh and try again.');
+          if (!game || game.over) {
+            addLog('♻️ Resetting game...');
+            const pda = getGamePDA();
+            await program.methods.resetGame()
+              .accounts({
+                game: pda,
+                player: wallet.publicKey,
+                systemProgram: SystemProgram.programId
+              })
+              .rpc();
+            setTxCount(prev => prev + 1);
+            addLog('✅ Game reset!');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            await loadGame();
           } else {
-            addLog('❌ Reset error: ' + resetMsg.slice(0, 50));
+            addLog('✅ Resuming game!');
           }
+        } catch (resetErr) {
+          addLog('❌ Reset failed: ' + resetErr.message.slice(0, 40));
+          addLog('💡 Try refreshing page');
         }
       } else {
-        addLog('❌ Error: ' + errMsg.slice(0, 60));
+        addLog('❌ Error: ' + msg.slice(0, 50));
       }
     }
+    
     setLoading(false);
   };
 
   const move = async (dir) => {
     if (loading) return;
     if (practice) { practiceMove(dir); return; }
-    if (!program || !game) return;
+    if (!program || !game || !game.alive) return;
 
     setLoading(true);
     const arrows = { u: '⬆️', d: '⬇️', l: '⬅️', r: '➡️' };
@@ -206,39 +187,50 @@ function GameScreen() {
     try {
       let { px, py } = game;
       const maxDist = game.speedBoost > 0 ? 3 : 1;
+      
       if (dir === 'u') py = Math.max(0, py - maxDist);
       if (dir === 'd') py = Math.min(9, py + maxDist);
       if (dir === 'l') px = Math.max(0, px - maxDist);
       if (dir === 'r') px = Math.min(9, px + maxDist);
 
       const pda = getGamePDA();
-      await program.methods.movePlayer(px, py).accounts({ game: pda, player: wallet.publicKey })
+      const tx = await program.methods.movePlayer(px, py)
+        .accounts({ game: pda, player: wallet.publicKey })
         .postInstructions([
           await program.methods.processAiTurn().accounts({ game: pda, player: wallet.publicKey }).instruction(),
           await program.methods.advanceRound().accounts({ game: pda, player: wallet.publicKey }).instruction()
-        ]).rpc();
+        ])
+        .rpc();
 
       setTxCount(prev => prev + 3);
       addLog('✅ Move confirmed!');
       spawnParticle(px, py);
+      
+      await new Promise(resolve => setTimeout(resolve, 1500));
       await loadGame();
+      
     } catch (e) {
+      console.error("Move error:", e);
       addLog('❌ ' + e.message.slice(0, 50));
     }
+    
     setLoading(false);
   };
 
   const spawnParticle = (x, y) => {
-    const id = Date.now();
+    const id = Date.now() + Math.random();
     setParticles(prev => [...prev, { id, x, y }]);
-    setTimeout(() => setParticles(prev => prev.filter(p => p.id !== id)), 500);
+    setTimeout(() => setParticles(prev => prev.filter(p => p.id !== id)), 600);
   };
 
   const startPractice = () => {
     setPractice(true);
+    setKillCam(null);
+    setShowVictory(false);
     setPracticeGame({
       px: 5, py: 5, alive: true,
-      aiX: [1, 8, 1, 8, 4, 1, 8, 5, 4], aiY: [1, 1, 8, 8, 1, 5, 5, 8, 4],
+      aiX: [1, 8, 1, 8, 4, 1, 8, 5, 4],
+      aiY: [1, 1, 8, 8, 1, 5, 5, 8, 4],
       aiAlive: [true, true, true, true, true, true, true, true, true],
       aiPers: [0, 1, 2, 3, 0, 1, 2, 0, 3],
       round: 1, radius: 5, over: false,
@@ -246,7 +238,7 @@ function GameScreen() {
       shield: false, speedBoost: 0, freeze: 0, combo: 0, multiplier: 1,
       moves: 0, killed: 0, collected: 0
     });
-    addLog('[PRACTICE] Tutorial mode activated.');
+    addLog('[PRACTICE] Free mode started');
   };
 
   const practiceMove = (dir) => {
@@ -276,12 +268,13 @@ function GameScreen() {
           const dist = Math.abs(g.aiX[i] - g.px) + Math.abs(g.aiY[i] - g.py);
           if (dist <= 2) { g.aiAlive[i] = false; g.killed++; }
         }
+        addLog('💣 Bomb exploded!');
       }
       if (g.powerupType === 4) g.freeze = 2;
     }
     
     if (g.freeze > 0) {
-      addLog('AI FROZEN!');
+      addLog('⏱️ AI frozen!');
     } else {
       for (let i = 0; i < 9; i++) {
         if (!g.aiAlive[i]) continue;
@@ -291,8 +284,10 @@ function GameScreen() {
           if (Math.abs(dx) > Math.abs(dy)) g.aiX[i] += dx > 0 ? 1 : -1;
           else g.aiY[i] += dy > 0 ? 1 : -1;
         } else if (g.aiPers[i] === 1) {
-          if (g.aiX[i] < 5) g.aiX[i]++; else if (g.aiX[i] > 5) g.aiX[i]--;
-          else if (g.aiY[i] < 5) g.aiY[i]++; else if (g.aiY[i] > 5) g.aiY[i]--;
+          if (g.aiX[i] < 5) g.aiX[i]++;
+          else if (g.aiX[i] > 5) g.aiX[i]--;
+          else if (g.aiY[i] < 5) g.aiY[i]++;
+          else if (g.aiY[i] > 5) g.aiY[i]--;
         } else if (g.aiPers[i] === 2) {
           if (Math.abs(dx) > Math.abs(dy)) g.aiX[i] -= dx > 0 ? 1 : -1;
           else g.aiY[i] -= dy > 0 ? 1 : -1;
@@ -312,13 +307,12 @@ function GameScreen() {
             g.shield = false;
             g.aiAlive[i] = false;
             g.killed++;
-            addLog('Shield blocked attack!');
+            addLog('🛡️ Shield blocked!');
           } else {
             g.alive = false;
             g.over = true;
-            const names = ['AGGRO', 'DEFENSE', 'COWARD', 'CHAOS'];
-            setKillCam({ ai: i, name: names[g.aiPers[i]], x: g.aiX[i], y: g.aiY[i] });
-            addLog(`💀 Killed by ${names[g.aiPers[i]]} AI!`);
+            const names = ['🔥 AGGRO', '🛡️ DEFENSE', '😱 COWARD', '🎲 CHAOS'];
+            setKillCam({ ai: i, name: names[g.aiPers[i]] });
           }
         }
       }
@@ -343,7 +337,11 @@ function GameScreen() {
     }
     
     const pDist = Math.abs(g.px - 5) + Math.abs(g.py - 5);
-    if (pDist > g.radius) { g.alive = false; g.over = true; addLog('💀 Zone killed you!'); }
+    if (pDist > g.radius) {
+      g.alive = false;
+      g.over = true;
+      setKillCam({ ai: -1, name: '⚠️ SAFE ZONE' });
+    }
     
     for (let i = 0; i < 9; i++) {
       if (!g.aiAlive[i]) continue;
@@ -368,12 +366,24 @@ function GameScreen() {
     <div className="game-container">
       <div className="header">
         <h1>⚡ SOLSURVIVE ⚡</h1>
-        <div className="version">v2.0 DEVNET</div>
+        <div className="version">v2.0 • DEVNET</div>
       </div>
 
       <div className="wallet-section">
         {!practice && <WalletMultiButton className="wallet-btn" />}
-        {practice && <button onClick={() => { setPractice(false); setPracticeGame(null); }} className="btn-secondary">EXIT PRACTICE</button>}
+        {practice && (
+          <button 
+            onClick={() => { 
+              setPractice(false); 
+              setPracticeGame(null); 
+              setKillCam(null); 
+              setShowVictory(false); 
+            }} 
+            className="btn-secondary"
+          >
+            EXIT PRACTICE
+          </button>
+        )}
       </div>
 
       {showLobby ? (
@@ -383,20 +393,20 @@ function GameScreen() {
             <button onClick={startPractice} className="mode-btn practice">
               <div className="mode-icon">🤖</div>
               <div className="mode-name">PRACTICE MODE</div>
-              <div className="mode-desc">Free • Learn mechanics • No wallet</div>
+              <div className="mode-desc">Free • No wallet • Instant play</div>
             </button>
             {!practice && wallet.publicKey && (
               <button onClick={createGame} disabled={loading} className="mode-btn real">
                 <div className="mode-icon">💰</div>
                 <div className="mode-name">REAL BATTLE</div>
-                <div className="mode-desc">{loading ? 'DEPLOYING...' : '0.05 SOL • Win prize • On-chain'}</div>
+                <div className="mode-desc">{loading ? 'CREATING...' : '0.05 SOL • On-chain • Win prize'}</div>
               </button>
             )}
             {!wallet.publicKey && !practice && (
               <div className="mode-btn disabled">
                 <div className="mode-icon">🔌</div>
                 <div className="mode-name">CONNECT WALLET</div>
-                <div className="mode-desc">Required for real battles</div>
+                <div className="mode-desc">Phantom • Devnet mode</div>
               </div>
             )}
           </div>
@@ -410,11 +420,11 @@ function GameScreen() {
                 <span className="tx-value">{txCount}</span>
               </div>
               <div className="tx-item">
-                <span className="tx-label">COST (SOL)</span>
+                <span className="tx-label">COST</span>
                 <span className="tx-value">${txCost}</span>
               </div>
               <div className="tx-item eth">
-                <span className="tx-label">VS ETHEREUM</span>
+                <span className="tx-label">VS ETH</span>
                 <span className="tx-value">${ethCost}</span>
               </div>
             </div>
@@ -426,26 +436,26 @@ function GameScreen() {
               <span className="stat-value">{currentGame.round}/10</span>
             </div>
             <div className="stat-item">
-              <span className="stat-label">SAFE ZONE</span>
+              <span className="stat-label">ZONE</span>
               <span className="stat-value zone">{currentGame.radius}</span>
             </div>
             <div className="stat-item">
               <span className="stat-label">COMBO</span>
               <span className={`stat-value combo ${currentGame.combo >= 5 ? 'active' : ''}`}>
-                {currentGame.combo}x {currentGame.multiplier > 1 && `(${currentGame.multiplier}x 💰)`}
+                {currentGame.combo}x{currentGame.multiplier > 1 && ` (${currentGame.multiplier}x💰)`}
               </span>
             </div>
             <div className="stat-item">
               <span className="stat-label">STATUS</span>
               <span className={`stat-value ${currentGame.alive ? 'alive' : 'dead'}`}>
-                {currentGame.over ? (currentGame.alive ? '👑 WINNER' : '💀 DEAD') : '💚 ALIVE'}
+                {currentGame.over ? (currentGame.alive ? '👑 WIN' : '💀 DEAD') : '💚 ALIVE'}
               </span>
             </div>
           </div>
 
-          {currentGame.shield && <div className="powerup-indicator">🛡️ SHIELD ACTIVE</div>}
+          {currentGame.shield && <div className="powerup-indicator">🛡️ SHIELD</div>}
           {currentGame.speedBoost > 0 && <div className="powerup-indicator">⚡ SPEED x{currentGame.speedBoost}</div>}
-          {currentGame.freeze > 0 && <div className="powerup-indicator">⏱️ AI FROZEN</div>}
+          {currentGame.freeze > 0 && <div className="powerup-indicator">⏱️ FROZEN</div>}
 
           <div className="grid-container">
             <div className="grid-board">
@@ -492,39 +502,61 @@ function GameScreen() {
               <div className="killcam-title">💀 ELIMINATED</div>
               <div className="killcam-by">Killed by: {killCam.name}</div>
               <div className="killcam-stats">
-                <div>Survived: {currentGame.round} rounds</div>
+                <div>Rounds: {currentGame.round}</div>
                 <div>Combo: {currentGame.combo}x</div>
-                <div>AI Killed: {currentGame.killed}</div>
+                <div>Killed: {currentGame.killed} AI</div>
               </div>
-              <button onClick={() => practice ? setPracticeGame(null) : setGame(null)} className="btn-primary">
-                TRY AGAIN
+              <button 
+                onClick={() => {
+                  if (practice) {
+                    setPracticeGame(null);
+                    setKillCam(null);
+                  } else {
+                    setGame(null);
+                    setKillCam(null);
+                  }
+                }} 
+                className="btn-primary"
+              >
+                PLAY AGAIN
               </button>
             </div>
           )}
 
           {showVictory && (
             <div className="victory-screen">
-              <div className="victory-title">🎉 VICTORY ROYALE! 🎉</div>
+              <div className="victory-title">🎉 VICTORY! 🎉</div>
               <div className="victory-subtitle">SOLE SURVIVOR</div>
               <div className="victory-stats">
                 <div className="victory-stat">
-                  <span className="victory-label">Final Combo</span>
+                  <span className="victory-label">Combo</span>
                   <span className="victory-value">{currentGame.combo}x</span>
                 </div>
                 <div className="victory-stat">
-                  <span className="victory-label">Prize Multiplier</span>
+                  <span className="victory-label">Multiplier</span>
                   <span className="victory-value">{currentGame.multiplier}x 💰</span>
                 </div>
                 <div className="victory-stat">
-                  <span className="victory-label">AI Eliminated</span>
+                  <span className="victory-label">AI Killed</span>
                   <span className="victory-value">{currentGame.killed}</span>
                 </div>
                 <div className="victory-stat">
-                  <span className="victory-label">Total Moves</span>
+                  <span className="victory-label">Moves</span>
                   <span className="victory-value">{currentGame.moves}</span>
                 </div>
               </div>
-              <button onClick={() => { practice ? setPracticeGame(null) : setGame(null); setShowVictory(false); }} className="btn-primary">
+              <button 
+                onClick={() => {
+                  if (practice) {
+                    setPracticeGame(null);
+                    setShowVictory(false);
+                  } else {
+                    setGame(null);
+                    setShowVictory(false);
+                  }
+                }} 
+                className="btn-primary"
+              >
                 PLAY AGAIN
               </button>
             </div>
